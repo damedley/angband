@@ -85,6 +85,7 @@ struct brand {
 	char *name;
 	char *verb;
 	int resist_flag;
+	int vuln_flag;
 	int multiplier;
 	int o_multiplier;
 	int power;
@@ -225,6 +226,7 @@ struct object_kind {
 	struct effect *effect;	/**< Effect this item produces (effects.c) */
 	int power;				/**< Power of the item's effect */
 	char *effect_msg;
+	char *vis_msg;
 	random_value time;		/**< Recharge time (rods/activation) */
 	random_value charge;	/**< Number of charges (staves/wands) */
 

@@ -39,6 +39,7 @@ struct projection {
 	int damage_cap;
 	int msgt;
 	bool obvious;
+	bool wake;
 	int color;
 	struct projection *next;
 };
@@ -75,6 +76,7 @@ enum
  *   PLAY: May affect the player
  *   INFO: Use believed map rather than truth for player ui
  *   SHORT: Use one quarter of max_range
+ *   SELF: May affect the player, even when cast by the player
  */
 enum
 {
@@ -93,6 +95,8 @@ enum
 	PROJECT_PLAY  = 0x0800,
 	PROJECT_INFO  = 0x1000,
 	PROJECT_SHORT = 0x2000,
+	PROJECT_SELF  = 0x4000,
+	PROJECT_ROCK  = 0x8000,
 };
 
 /* Display attrs and chars */
@@ -110,7 +114,7 @@ bool project_o(struct source, int r, struct loc grid, int dam, int typ,
 void project_m(struct source, int r, struct loc grid, int dam, int typ, int flg,
                bool *did_hit, bool *was_obvious);
 bool project_p(struct source, int r, struct loc grid, int dam, int typ,
-			   int power);
+			   int power, bool self);
 
 int project_path(struct loc *gp, int range, struct loc grid1, struct loc grid2,
 				 int flg);

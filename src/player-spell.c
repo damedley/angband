@@ -423,7 +423,7 @@ s16b spell_chance(int spell_index)
 		chance += 15;
 	}
 
-	/* Amnesia doubles failure chance */
+	/* Amnesia makes spells very difficult */
 	if (player->timed[TMD_AMNESIA]) {
 		chance = 50 + chance / 2;
 	}
@@ -481,7 +481,7 @@ static int beam_chance(void)
 /**
  * Cast the specified spell
  */
-bool spell_cast(int spell_index, int dir)
+bool spell_cast(int spell_index, int dir, struct command *cmd)
 {
 	int chance;
 	bool *ident = mem_zalloc(sizeof(*ident));
@@ -500,9 +500,14 @@ bool spell_cast(int spell_index, int dir)
 	} else {
 		/* Cast the spell */
 		if (!effect_do(spell->effect, source_player(), NULL, ident, true, dir,
-					   beam, 0)) {
+					   beam, 0, cmd)) {
 			mem_free(ident);
 			return false;
+		}
+
+		/* Reward COMBAT_REGEN with small HP recovery */
+		if (player_has(player, PF_COMBAT_REGEN)) {
+			convert_mana_to_hp(player, spell->smana << 16);
 		}
 
 		/* A spell was cast */
@@ -600,16 +605,9 @@ static void spell_effect_append_value_info(const struct effect *effect,
 			if (rv.m_bonus) special = "random";
 			break;
 		case EF_SPHERE:
-			/* Halve damage */
-			rv.base /= 2;
-			rv.sides /= 2;
-
 			/* Append radius */
 			if (effect->radius) {
 				int rad = effect->radius;
-				if (effect->other) {
-					rad += player->lev / effect->other;
-				}
 				special = format(", rad %d", rad);
 			} else {
 				special = ", rad 2";

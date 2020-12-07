@@ -163,7 +163,7 @@ void do_cmd_version(void)
 			  format("You are playing %s.  Type '?' for more info.", buildver),
 			  sizeof(header_buf));
 	textblock_append(tb, "\n");
-	textblock_append(tb, copyright);
+	textblock_append(tb, "%s", copyright);
 	textui_textblock_show(tb, local_area, header_buf);
 	textblock_free(tb);
 }
@@ -272,7 +272,7 @@ void textui_quit(void)
  * Screenshot loading/saving code
  * ------------------------------------------------------------------------ */
 
-static void write_html_escape_char(ang_file *fp, wchar_t c)
+static void write_html_escape_char(ang_file *fp, char *mbbuf, wchar_t c)
 {
 	switch (c)
 	{
@@ -287,15 +287,39 @@ static void write_html_escape_char(ang_file *fp, wchar_t c)
 			break;
 		default:
 		{
-			char *mbseq = (char*) mem_alloc(sizeof(char)*(MB_CUR_MAX+1));
-			byte len;
-			len = wctomb(mbseq, c);
-			if (len > MB_CUR_MAX) 
-				len = MB_CUR_MAX;
-			mbseq[len] = '\0';
-			file_putf(fp, "%s", mbseq);
-			mem_free(mbseq);
+			int nc = text_wctomb(mbbuf, c);
+
+			if (nc > 0) {
+				mbbuf[nc] = 0;
+			} else {
+				mbbuf[0] = ' ';
+				mbbuf[1] = 0;
+			}
+			file_putf(fp, "%s", mbbuf);
 			break;
+		}
+	}
+}
+
+
+static void screenshot_term_query(int wid, int hgt, int x, int y, int *a, wchar_t *c)
+{
+	if (y < ROW_MAP || y == hgt - 1 || x < COL_MAP) {
+		/* Record everything outside the map. */
+		(void) Term_what(x, y, a, c);
+	} else {
+		/*
+		 * In the map, skip over the padding for scaled up tiles.  As
+		 * necessary, pad trailing columns and rows with blanks.
+		 */
+		int srcx = (x - COL_MAP) * tile_width + COL_MAP;
+		int srcy = (y - ROW_MAP) * tile_height + ROW_MAP;
+
+		if (srcx < wid && srcy < hgt - 1) {
+			(void) Term_what(srcx, srcy, a, c);
+		} else {
+			*a = Term->attr_blank;
+			*c = Term->char_blank;
 		}
 	}
 }
@@ -323,12 +347,15 @@ void html_screenshot(const char *path, int mode)
 					: "[/COLOR][COLOR=\"#%02X%02X%02X\"]";
 	const char *close_color_fmt = mode ==  0 ? "</font>" : "[/COLOR]";
 
+	char *mbbuf;
 	ang_file *fp;
 
+	mbbuf = mem_alloc(text_wcsz() + 1);
 	fp = file_open(path, MODE_WRITE, FTYPE_TEXT);
 
 	/* Oops */
 	if (!fp) {
+		mem_free(mbbuf);
 		plog_fmt("Cannot write the '%s' file!", path);
 		return;
 	}
@@ -351,7 +378,7 @@ void html_screenshot(const char *path, int mode)
 	for (y = 0; y < hgt; y++) {
 		for (x = 0; x < wid; x++) {
 			/* Get the attr/char */
-			(void)(Term_what(x, y, &a, &c));
+			screenshot_term_query(wid, hgt, x, y, &a, &c);
 
 			/* Set the foreground and background */
 			fg_colour = a % MAX_COLORS;
@@ -401,11 +428,17 @@ void html_screenshot(const char *path, int mode)
 			}
 
 			/* Write the character and escape special HTML characters */
-			if (mode == 0) write_html_escape_char(fp, c);
+			if (mode == 0) write_html_escape_char(fp, mbbuf, c);
 			else {
-				char mbseq[MB_LEN_MAX+1] = {0};
-				wctomb(mbseq, c);
-				file_putf(fp, "%s", mbseq);
+				int nc = text_wctomb(mbbuf, c);
+
+				if (nc > 0) {
+					mbbuf[nc] = 0;
+				} else {
+					mbbuf[0] = ' ';
+					mbbuf[1] = 0;
+				}
+				file_putf(fp, "%s", mbbuf);
 			}
 		}
 
@@ -426,6 +459,8 @@ void html_screenshot(const char *path, int mode)
 
 	/* Close it */
 	file_close(fp);
+
+	mem_free(mbbuf);
 }
 
 

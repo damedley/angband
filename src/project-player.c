@@ -51,7 +51,7 @@ int adjust_dam(struct player *p, int type, int dam, aspect dam_aspect,
 	if (p && p->race) {
 		/* Ice is a special case */
 		int res_type = (type == PROJ_ICE) ? PROJ_COLD: type;
-		resist = p->state.el_info[res_type].res_level;
+		resist = res_type < ELEM_MAX ? p->state.el_info[res_type].res_level : 0;
 
 		/* Notice element stuff */
 		if (actual) {
@@ -416,7 +416,7 @@ static int project_player_handler_CHAOS(project_player_handler_context_t *contex
 
 	/* Life draining */
 	if (!player_of_has(player, OF_HOLD_LIFE)) {
-		int drain = 5000 + (player->exp / 100) * z_info->life_drain_percent;
+		int drain = ((player->exp * 3)/ (100 * 2)) * z_info->life_drain_percent;
 		msg("You feel your life force draining away!");
 		player_exp_lose(player, drain, false);
 	} else {
@@ -765,7 +765,7 @@ static const project_player_handler_f player_handlers[] = {
  * We assume the player is aware of some effect, and always return "true".
  */
 bool project_p(struct source origin, int r, struct loc grid, int dam, int typ,
-			   int power)
+			   int power, bool self)
 {
 	bool blind = (player->timed[TMD_BLIND] ? true : false);
 	bool seen = !blind;
@@ -797,9 +797,12 @@ bool project_p(struct source origin, int r, struct loc grid, int dam, int typ,
 	}
 
 	switch (origin.what) {
-		case SRC_PLAYER:
-			/* Never affect projector */
-			return false;
+		case SRC_PLAYER: {
+			/* Don't affect projector unless explicitly allowed */
+			if (!self) return false;
+
+			break;
+		}
 
 		case SRC_MONSTER: {
 			struct monster *mon = cave_monster(cave, origin.which.monster);
@@ -860,6 +863,10 @@ bool project_p(struct source origin, int r, struct loc grid, int dam, int typ,
 					 res_level,
 					 true);
 	if (dam) {
+		/* Self-inflicted damage is scaled down */
+		if (self) {
+			dam /= 10;
+		}
 		take_hit(player, dam, killer);
 	}
 
@@ -870,7 +877,7 @@ bool project_p(struct source origin, int r, struct loc grid, int dam, int typ,
 	}
 
 	/* Disturb */
-	disturb(player, 1);
+	disturb(player);
 
 	/* Return "Anything seen?" */
 	return context.obvious;

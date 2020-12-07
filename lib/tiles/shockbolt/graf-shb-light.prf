@@ -1,8 +1,8 @@
-# File: graf-shb.prf
+# File: graf-shb-light.prf
 
 #
 # This file defines special attr/char mappings for use in "graphics" mode
-# with Shockbolt's 64x64 tiles.
+# with Shockbolt's 64x64 tiles, with light-coloured background.
 #
 # Converted by Mogami from the dg32-assign of AngbandTK
 # Additional work by Ivan Jekic (the.edge@Net.yu)
@@ -372,6 +372,7 @@ object:hafted:Two-Handed Great Flail:0x8A:0x9A
 object:hafted:Mace:0x8A:0x94
 object:hafted:Lead-Filled Mace:0x8A:0x98
 object:hafted:Quarterstaff:0x8A:0x95
+object:hafted:Throwing Hammer:0x8B:0xAB
 object:hafted:War Hammer:0x8A:0x93
 object:hafted:Maul:0x8A:0xB0
 object:hafted:Great Hammer:0x8B:0x94
@@ -387,6 +388,7 @@ object:polearm:Pike:0x8A:0xA2
 
 ### Axes ###
 
+object:polearm:Throwing Axe:0x8B:0xBF
 object:polearm:Beaked Axe:0x8A:0xA3
 object:polearm:Broad Axe:0x8A:0xA4
 object:polearm:Battle Axe:0x8A:0xA1
@@ -416,7 +418,7 @@ object:arrow:Seeker Arrow:0x8A:0xB2
 object:arrow:Mithril Arrow:0x8A:0xD9
 object:bolt:Bolt:0x8A:0xB3
 object:bolt:Seeker Bolt:0x8A:0xB4
-object:bolt:Mithril Bolt:0x8A:0xE3
+object:bolt:Mithril Bolt:0x8A:0xDA
 object:shot:Rounded Pebble:0x8A:0xB5
 object:shot:Iron Shot:0x8A:0xB6
 object:shot:Mithril Shot:0x8B:0xB6

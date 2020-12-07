@@ -407,7 +407,7 @@ struct player_state {
 
 	int num_blows;		/**< Number of blows x100 */
 	int num_shots;		/**< Number of shots x10 */
-	int num_moves;		/**< Number of movement actions */
+	int num_moves;		/**< Number of extra movement actions */
 
 	int ammo_mult;		/**< Ammo multiplier */
 	int ammo_tval;		/**< Ammo variety */
@@ -619,6 +619,7 @@ bool player_stat_dec(struct player *p, int stat, bool permanent);
 void player_exp_gain(struct player *p, s32b amount);
 void player_exp_lose(struct player *p, s32b amount, bool permanent);
 void player_flags(struct player *p, bitflag f[OF_SIZE]);
+void player_flags_timed(struct player *p, bitflag f[OF_SIZE]);
 byte player_hp_attr(struct player *p);
 byte player_sp_attr(struct player *p);
 bool player_restore_mana(struct player *p, int amt);

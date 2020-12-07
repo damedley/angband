@@ -253,7 +253,7 @@ void do_mon_spell(int index, struct monster *mon, bool seen)
 	}
 
 	/* Tell the player what's going on */
-	disturb(player, 1);
+	disturb(player);
 	spell_message(mon, spell, seen, hits);
 
 	if (hits) {
@@ -270,7 +270,7 @@ void do_mon_spell(int index, struct monster *mon, bool seen)
 			msg("%s", level->save_message);
 			spell_check_for_fail_rune(spell);
 		} else {
-			effect_do(spell->effect, source_monster(mon->midx), NULL, &ident, true, 0, 0, 0);
+			effect_do(spell->effect, source_monster(mon->midx), NULL, &ident, true, 0, 0, 0, NULL);
 		}
 	}
 }

@@ -43,6 +43,7 @@
 #include "option.h"
 #include "player-spell.h"
 #include "project.h"
+#include "ui-entry.h"
 
 static const char *mon_race_flags[] =
 {
@@ -183,6 +184,8 @@ static void write_curse_kinds(void)
 		}
 		curse->obj->known->kind = curse_object_kind;
 		curses[i].obj->known->sval = sval;
+		/* Mark it as touched so it can be fully known. */
+		curse->obj->known->notice |= OBJ_NOTICE_ASSESSED;
 	}
 }
 
@@ -339,6 +342,16 @@ static enum parser_error parse_projection_obvious(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
+static enum parser_error parse_projection_wake(struct parser *p) {
+	int wake = parser_getuint(p, "answer");
+	struct projection *projection = parser_priv(p);
+	if (!projection)
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+
+	projection->wake = (wake == 1) ? true : false;;
+	return PARSE_ERROR_NONE;
+}
+
 static enum parser_error parse_projection_color(struct parser *p) {
 	struct projection *projection = parser_priv(p);
 	const char *color;
@@ -369,6 +382,7 @@ struct parser *init_parse_projection(void) {
 	parser_reg(p, "damage-cap uint cap", parse_projection_damage_cap);
 	parser_reg(p, "msgt sym type", parse_projection_message_type);
 	parser_reg(p, "obvious uint answer", parse_projection_obvious);
+	parser_reg(p, "wake uint answer", parse_projection_wake);
 	parser_reg(p, "color sym color", parse_projection_color);
 	return p;
 }
@@ -875,6 +889,23 @@ static enum parser_error parse_brand_resist_flag(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
+static enum parser_error parse_brand_vuln_flag(struct parser *p) {
+	int flag;
+	struct brand *brand = parser_priv(p);
+	if (!brand)
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+
+	flag = lookup_flag(mon_race_flags, parser_getsym(p, "flag"));
+
+	if (flag == FLAG_END) {
+		return PARSE_ERROR_INVALID_FLAG;
+	} else {
+		brand->vuln_flag = flag;
+	}
+
+	return PARSE_ERROR_NONE;
+}
+
 struct parser *init_parse_brand(void) {
 	struct parser *p = parser_new();
 	parser_setpriv(p, NULL);
@@ -885,6 +916,7 @@ struct parser *init_parse_brand(void) {
 	parser_reg(p, "o-multiplier uint multiplier", parse_brand_o_multiplier);
 	parser_reg(p, "power uint power", parse_brand_power);
 	parser_reg(p, "resist-flag sym flag", parse_brand_resist_flag);
+	parser_reg(p, "vuln-flag sym flag", parse_brand_vuln_flag);
 	return p;
 }
 
@@ -1799,6 +1831,13 @@ static enum parser_error parse_object_msg(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
+static enum parser_error parse_object_vis_msg(struct parser *p) {
+	struct object_kind *k = parser_priv(p);
+	assert(k);
+	k->vis_msg = string_append(k->vis_msg, parser_getstr(p, "text"));
+	return PARSE_ERROR_NONE;
+}
+
 static enum parser_error parse_object_time(struct parser *p) {
 	struct object_kind *k = parser_priv(p);
 	assert(k);
@@ -1927,6 +1966,7 @@ struct parser *init_parse_object(void) {
 	parser_reg(p, "dice str dice", parse_object_dice);
 	parser_reg(p, "expr sym name sym base str expr", parse_object_expr);
 	parser_reg(p, "msg str text", parse_object_msg);
+	parser_reg(p, "vis-msg str text", parse_object_vis_msg);
 	parser_reg(p, "time rand time", parse_object_time);
 	parser_reg(p, "pval rand pval", parse_object_pval);
 	parser_reg(p, "values str values", parse_object_values);
@@ -1987,6 +2027,7 @@ static void cleanup_object(void)
 		string_free(kind->name);
 		string_free(kind->text);
 		string_free(kind->effect_msg);
+		string_free(kind->vis_msg);
 		mem_free(kind->brands);
 		mem_free(kind->slays);
 		mem_free(kind->curses);
@@ -2085,6 +2126,8 @@ static enum parser_error parse_ego_item(struct parser *p) {
 		return PARSE_ERROR_MISSING_RECORD_HEADER;
 	if (tval < 0)
 		return PARSE_ERROR_UNRECOGNISED_TVAL;
+	if (sval < 0)
+		return PARSE_ERROR_UNRECOGNISED_SVAL;
 
 	poss = mem_zalloc(sizeof(struct poss_item));
 	poss->kidx = lookup_kind(tval, sval)->kidx;
@@ -3081,6 +3124,23 @@ static enum parser_error parse_object_property_desc(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
+static enum parser_error parse_object_property_bindui(struct parser* p) {
+	struct obj_property *prop = parser_priv(p);
+	const char *uiname = parser_getsym(p, "ui");
+	bool isaux = (parser_getint(p, "aux") != 0);
+	bool have_val = parser_hasval(p, "uival");
+	int val = (have_val) ? parser_getint(p, "uival") : 0;
+
+	if (!prop)
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	if (prop->type == OBJ_PROPERTY_NONE) {
+		return PARSE_ERROR_INVALID_PROPERTY;
+	}
+	(void) bind_object_property_to_ui_entry_by_name(uiname, prop->type,
+		prop->index, val, have_val, isaux);
+	return PARSE_ERROR_NONE;
+}
+
 struct parser *init_parse_object_property(void) {
 	struct parser *p = parser_new();
 	parser_setpriv(p, NULL);
@@ -3096,6 +3156,7 @@ struct parser *init_parse_object_property(void) {
 	parser_reg(p, "neg-adjective str neg_adj", parse_object_property_neg_adj);
 	parser_reg(p, "msg str msg", parse_object_property_msg);
 	parser_reg(p, "desc str desc", parse_object_property_desc);
+	parser_reg(p, "bindui sym ui int aux ?int uival", parse_object_property_bindui);
 	return p;
 }
 

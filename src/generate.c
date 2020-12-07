@@ -177,12 +177,21 @@ static enum parser_error parse_profile_room(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
-static enum parser_error parse_profile_cutoff(struct parser *p) {
+static enum parser_error parse_profile_min_level(struct parser *p) {
     struct cave_profile *c = parser_priv(p);
 
 	if (!c)
 		return PARSE_ERROR_MISSING_RECORD_HEADER;
-	c->cutoff = parser_getint(p, "cutoff");
+	c->min_level = parser_getint(p, "min");
+	return PARSE_ERROR_NONE;
+}
+
+static enum parser_error parse_profile_alloc(struct parser *p) {
+    struct cave_profile *c = parser_priv(p);
+
+	if (!c)
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+	c->alloc = parser_getint(p, "alloc");
 	return PARSE_ERROR_NONE;
 }
 
@@ -194,7 +203,8 @@ static struct parser *init_parse_profile(void) {
 	parser_reg(p, "tunnel int rnd int chg int con int pen int jct", parse_profile_tunnel);
 	parser_reg(p, "streamer int den int rng int mag int mc int qua int qc", parse_profile_streamer);
 	parser_reg(p, "room sym name int rating int height int width int level int pit int rarity int cutoff", parse_profile_room);
-	parser_reg(p, "cutoff int cutoff", parse_profile_cutoff);
+	parser_reg(p, "min-level int min", parse_profile_min_level);
+	parser_reg(p, "alloc int alloc", parse_profile_alloc);
 	return p;
 }
 
@@ -649,7 +659,7 @@ static void place_feeling(struct chunk *c)
 				continue;
 
 			/* Set the cave square appropriately */
-			sqinfo_on(square(c, grid).info, SQUARE_FEEL);
+			sqinfo_on(square(c, grid)->info, SQUARE_FEEL);
 			
 			break;
 		}
@@ -717,6 +727,26 @@ static int calc_mon_feeling(struct chunk *c)
 }
 
 /**
+ * Find a cave_profile by name
+ * \param name is the name of the cave_profile being looked for
+ */
+const struct cave_profile *find_cave_profile(char *name)
+{
+	int i;
+
+	for (i = 0; i < z_info->profile_max; i++) {
+		const struct cave_profile *profile;
+
+		profile = &cave_profiles[i];
+		if (!strcmp(name, profile->name))
+			return profile;
+	}
+
+	/* Not there */
+	return NULL;
+}
+
+/**
  * Do d_m's prime check for labyrinths
  * \param depth is the depth where we're trying to generate a labyrinth
  */
@@ -746,32 +776,14 @@ bool labyrinth_check(int depth)
 }
 
 /**
- * Find a cave_profile by name
- * \param name is the name of the cave_profile being looked for
- */
-const struct cave_profile *find_cave_profile(char *name)
-{
-	int i;
-
-	for (i = 0; i < z_info->profile_max; i++) {
-		const struct cave_profile *profile;
-
-		profile = &cave_profiles[i];
-		if (!strcmp(name, profile->name))
-			return profile;
-	}
-
-	/* Not there */
-	return NULL;
-}
-
-/**
  * Choose a cave profile
  * \param p is the player
  */
 const struct cave_profile *choose_profile(struct player *p)
 {
 	const struct cave_profile *profile = NULL;
+	int moria_alloc = find_cave_profile("moria")->alloc;
+	int labyrinth_alloc = find_cave_profile("labyrinth")->alloc;
 
 	/* A bit of a hack, but worth it for now NRM */
 	if (player->noscore & NOSCORE_JUMPING) {
@@ -794,16 +806,40 @@ const struct cave_profile *choose_profile(struct player *p)
 	} else if (is_quest(p->depth) && !OPT(p, birth_levels_persist)) {
 		/* Quest levels must be normal levels */
 		profile = find_cave_profile("classic");
-	} else if (labyrinth_check(p->depth)) {
+	} else if (labyrinth_check(p->depth) &&
+			(labyrinth_alloc > 0 || labyrinth_alloc == -1)) {
 		profile = find_cave_profile("labyrinth");
-	} else if ((p->depth >= 10) && (p->depth < 40) && one_in_(40)) {
+	} else if ((p->depth >= 10) && (p->depth < 40) && one_in_(40) &&
+			(moria_alloc > 0 || moria_alloc == -1)) {
 		profile = find_cave_profile("moria");
 	} else {
-		int pick = randint0(200);
+		int total_alloc = 0;
 		size_t i;
+
+		/*
+		 * Use PowerWyrm's selection algorithm from
+		 * get_random_monster_object() so the selection can be done in
+		 * one pass and without auxiliary storage (at the cost of more
+		 * calls to randint0()).  The mth valid profile out of n valid
+		 * profiles appears with probability, alloc(m) /
+		 * sum(i = 0 to m, alloc(i)) * product(j = m + 1 to n - 1,
+		 * 1 - alloc(j) / sum(k = 0 to j, alloc(k))) which is equal to
+		 * alloc(m) / sum(i = 0 to m, alloc(i)) * product(j = m + 1 to
+		 * n - 1, sum(k = 0 to j - 1, alloc(k)) / sum(l = 0 to j,
+		 * alloc(l))) which, by the canceling of successive numerators
+		 * and denominators is alloc(m) / sum(l = 0 to n - 1, alloc(l)).
+		 */
 		for (i = 0; i < z_info->profile_max; i++) {
-			profile = &cave_profiles[i];
-			if (profile->cutoff >= pick) break;
+			struct cave_profile *test_profile = &cave_profiles[i];
+			if (test_profile->alloc <= 0 ||
+				 p->depth < test_profile->min_level) continue;
+			total_alloc += test_profile->alloc;
+			if (randint0(total_alloc) < test_profile->alloc) {
+				profile = test_profile;
+			}
+		}
+		if (!profile) {
+			profile = find_cave_profile("classic");
 		}
 	}
 
@@ -1015,10 +1051,10 @@ static struct chunk *cave_generate(struct player *p, int height, int width)
 			for (x = 0; x < chunk->width; x++) {
 				struct loc grid = loc(x, y);
 
-				sqinfo_off(square(chunk, grid).info, SQUARE_WALL_INNER);
-				sqinfo_off(square(chunk, grid).info, SQUARE_WALL_OUTER);
-				sqinfo_off(square(chunk, grid).info, SQUARE_WALL_SOLID);
-				sqinfo_off(square(chunk, grid).info, SQUARE_MON_RESTRICT);
+				sqinfo_off(square(chunk, grid)->info, SQUARE_WALL_INNER);
+				sqinfo_off(square(chunk, grid)->info, SQUARE_WALL_OUTER);
+				sqinfo_off(square(chunk, grid)->info, SQUARE_WALL_SOLID);
+				sqinfo_off(square(chunk, grid)->info, SQUARE_MON_RESTRICT);
 
 				if (square_isstairs(chunk, grid)) {
 					size_t n;
@@ -1027,7 +1063,7 @@ static struct chunk *cave_generate(struct player *p, int height, int width)
 					new->feat = square_feat(chunk, grid)->fidx;
 					new->info = mem_zalloc(SQUARE_SIZE * sizeof(bitflag));
 					for (n = 0; n < SQUARE_SIZE; n++) {
-						new->info[n] = square(chunk, grid).info[n];
+						new->info[n] = square(chunk, grid)->info[n];
 					}
 					new->next = chunk->join;
 					chunk->join = new;
@@ -1205,9 +1241,10 @@ void prepare_next_level(struct chunk **c, struct player *p)
 						struct object *obj = square_object(*c, loc(x, y));
 						while (obj) {
 							if (obj->artifact) {
-								bool found = obj->known && obj->known->artifact;
+								bool found = obj_is_known_artifact(obj);
 								if (OPT(p, birth_lose_arts) || found) {
 									history_lose_artifact(p, obj->artifact);
+									obj->artifact->created = true;
 								} else {
 									obj->artifact->created = false;
 								}
@@ -1267,7 +1304,7 @@ void prepare_next_level(struct chunk **c, struct player *p)
 				for (y = 0; y < (*c)->height; y++) {
 					for (x = 0; x < (*c)->width; x++) {
 						struct loc grid = loc(x, y);
-						if (square(*c, grid).mon == -1) {
+						if (square(*c, grid)->mon == -1) {
 							p->grid = grid;
 							found = true;
 							break;
@@ -1354,6 +1391,10 @@ void prepare_next_level(struct chunk **c, struct player *p)
 	/* Know the town */
 	if (!(p->depth)) {
 		cave_known(p);
+		if (persist) {
+			cave_illuminate(*c, is_daytime());
+		}
+
 	}
 
 	/* The dungeon is ready */

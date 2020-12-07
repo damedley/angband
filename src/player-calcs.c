@@ -947,6 +947,17 @@ bool earlier_object(struct object *orig, struct object *new, bool store)
 		if (!obj_can_browse(orig) && obj_can_browse(new)) return true;
 	}
 
+	/* Usable ammo is before other ammo */
+	if (tval_is_ammo(orig) && tval_is_ammo(new)) {
+		/* First favour usable ammo */
+		if ((player->state.ammo_tval == orig->tval) &&
+			(player->state.ammo_tval != new->tval))
+			return false;
+		if ((player->state.ammo_tval != orig->tval) &&
+			(player->state.ammo_tval == new->tval))
+			return true;
+	}
+
 	/* Objects sort by decreasing type */
 	if (orig->tval > new->tval) return false;
 	if (orig->tval < new->tval) return true;
@@ -975,18 +986,14 @@ bool earlier_object(struct object *orig, struct object *new, bool store)
 
 	/* Objects sort by decreasing value, except ammo */
 	if (tval_is_ammo(orig)) {
-		if (object_value(orig, 1) <
-			object_value(new, 1))
+		if (object_value(orig, 1) < object_value(new, 1))
 			return false;
-		if (object_value(orig, 1) >
-			object_value(new, 1))
+		if (object_value(orig, 1) >	object_value(new, 1))
 			return true;
 	} else {
-		if (object_value(orig, 1) >
-			object_value(new, 1))
+		if (object_value(orig, 1) >	object_value(new, 1))
 			return false;
-		if (object_value(orig, 1) <
-			object_value(new, 1))
+		if (object_value(orig, 1) <	object_value(new, 1))
 			return true;
 	}
 
@@ -1041,19 +1048,22 @@ void calc_inventory(struct player_upkeep *upkeep, struct object *gear,
 
 		/* Find the first quiver object with the correct label */
 		for (current = gear; current; current = current->next) {
-			/* Ignore non-ammo */
-			if (!tval_is_ammo(current)) continue;
+			bool throwing = of_has(current->flags, OF_THROWING);
+
+			/* Only allow ammo and throwing weapons */
+			if (!(tval_is_ammo(current) || throwing)) continue;
 
 			/* Allocate inscribed objects if it's the right slot */
 			if (current->note) {
 				const char *s = strchr(quark_str(current->note), '@');
-				if (s && s[1] == 'f') {
+				if (s && (s[1] == 'f' || s[1] == 'v')) {
 					int choice = s[2] - '0';
 
 					/* Correct slot, fill it straight away */
 					if (choice == i) {
+						int mult = tval_is_ammo(current) ? 1 : 5;
 						upkeep->quiver[i] = current;
-						upkeep->quiver_cnt += current->number;
+						upkeep->quiver_cnt += current->number * mult;
 
 						/* In the quiver counts as worn */
 						object_learn_on_wield(player, current);
@@ -1874,7 +1884,7 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 			for (j = 0; j < ELEM_MAX; j++) {
 				if (!known_only || obj->known->el_info[j].res_level) {
 					if (obj->el_info[j].res_level == -1)
-						vuln[i] = true;
+						vuln[j] = true;
 
 					/* OK because res_level hasn't included vulnerability yet */
 					if (obj->el_info[j].res_level > state->el_info[j].res_level)
@@ -1938,6 +1948,11 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	if (player_has(p, PF_EVIL) && character_dungeon) {
 		state->el_info[ELEM_NETHER].res_level = 1;
 		state->el_info[ELEM_HOLY_ORB].res_level = -1;
+	}
+
+	/* Combat Regeneration */
+	if (player_has(p, PF_COMBAT_REGEN) && character_dungeon) {
+		of_on(state->flags, OF_IMPAIR_HP);
 	}
 
 	/* Calculate the various stat values */
@@ -2021,6 +2036,8 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	}
 
 	/* Other timed effects */
+	player_flags_timed(p, state->flags);
+
 	if (player_timed_grade_eq(p, TMD_STUN, "Heavy Stun")) {
 		state->to_h -= 20;
 		state->to_d -= 20;
@@ -2051,17 +2068,12 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 		state->to_a += 40;
 		state->speed -= 5;
 	}
-	if (p->timed[TMD_BOLD]) {
-		of_on(state->flags, OF_PROT_FEAR);
-	}
 	if (p->timed[TMD_HERO]) {
-		of_on(state->flags, OF_PROT_FEAR);
 		state->to_h += 12;
 		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 105 / 100;
 	}
 	if (p->timed[TMD_SHERO]) {
-		of_on(state->flags, OF_PROT_FEAR);
-		state->to_h += 24;
+		state->skills[SKILL_TO_HIT_MELEE] += 75;
 		state->to_a -= 10;
 		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 9 / 10;
 	}
@@ -2073,15 +2085,6 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	}
 	if (p->timed[TMD_SINFRA]) {
 		state->see_infra += 5;
-	}
-	if (p->timed[TMD_TELEPATHY]) {
-		of_on(state->flags, OF_TELEPATHY);
-	}
-	if (p->timed[TMD_SINVIS]) {
-		of_on(state->flags, OF_SEE_INVIS);
-	}
-	if (p->timed[TMD_AFRAID] || p->timed[TMD_TERROR]) {
-		of_on(state->flags, OF_AFRAID);
 	}
 	if (p->timed[TMD_TERROR]) {
 		state->speed += 10;
@@ -2100,9 +2103,6 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	}
 	if (p->timed[TMD_OPP_POIS] && (state->el_info[ELEM_POIS].res_level < 2)) {
 			state->el_info[ELEM_POIS].res_level++;
-	}
-	if (p->timed[TMD_OPP_CONF]) {
-		of_on(state->flags, OF_PROT_CONF);
 	}
 	if (p->timed[TMD_CONFUSED]) {
 		state->skills[SKILL_DEVICE] = state->skills[SKILL_DEVICE] * 75 / 100;
@@ -2221,6 +2221,7 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 			state->bless_wield = true;
 		}
 	} else {
+		/* Unarmed */
 		state->num_blows = calc_blows(p, NULL, state, extra_blows);
 	}
 
@@ -2231,12 +2232,7 @@ void calc_bonuses(struct player *p, struct player_state *state, bool known_only,
 	}
 
 	/* Movement speed */
-	state->num_moves = 1 + extra_moves;
-
-	/* Damage reduction for blackguards */
-	if (player_has(p, PF_CROWD_FIGHT)) {
-		state->perc_dam_red = player_crowd_damage_reduction(p);
-	}
+	state->num_moves = extra_moves;
 
 	return;
 }

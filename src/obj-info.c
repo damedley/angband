@@ -20,10 +20,10 @@
 #include "angband.h"
 #include "cmds.h"
 #include "effects.h"
+#include "effects-info.h"
 #include "game-world.h"
 #include "init.h"
 #include "monster.h"
-#include "mon-summon.h"
 #include "mon-util.h"
 #include "obj-curse.h"
 #include "obj-gear.h"
@@ -36,7 +36,6 @@
 #include "obj-util.h"
 #include "player-attack.h"
 #include "player-calcs.h"
-#include "player-timed.h"
 #include "project.h"
 #include "z-textblock.h"
 
@@ -64,18 +63,6 @@ static const struct origin_type {
 	#undef ORIGIN
 };
 
-static struct {
-	int index;
-	int args;
-	int efinfo_flag;
-	const char *desc;
-} base_descs[] = {
-	{ EF_NONE, 0, EFINFO_NONE, "" },
-	#define EFFECT(x, a, b, c, d, e) { EF_##x, c, d, e },
-	#include "list-effects.h"
-	#undef EFFECT
-};
-
 
 /**
  * ------------------------------------------------------------------------
@@ -93,7 +80,7 @@ static void info_out_list(textblock *tb, const char *list[], size_t count)
 	size_t i;
 
 	for (i = 0; i < count; i++) {
-		textblock_append(tb, list[i]);
+		textblock_append(tb, "%s", list[i]);
 		if (i != (count - 1)) textblock_append(tb, ", ");
 	}
 
@@ -137,7 +124,7 @@ static bool describe_curses(textblock *tb, const struct object *obj,
 	for (i = 1; i < z_info->curse_max; i++) {
 		if (c[i].power) {
 			textblock_append(tb, "It ");
-			textblock_append_c(tb, COLOUR_L_RED, curses[i].desc);
+			textblock_append_c(tb, COLOUR_L_RED, "%s", curses[i].desc);
 			if (c[i].power == 100) {
 				textblock_append(tb, "; this curse cannot be removed");
 			}
@@ -394,7 +381,7 @@ static bool describe_slays(textblock *tb, const struct object *obj)
 	for (i = 1; i < z_info->slay_max; i++) {
 		if (!s[i]) continue;
 
-		textblock_append(tb, slays[i].name);
+		textblock_append(tb, "%s", slays[i].name);
 		if (slays[i].multiplier > 3)
 			textblock_append(tb, " (powerfully)");
 		if (count > 1)
@@ -434,7 +421,7 @@ static bool describe_brands(textblock *tb, const struct object *obj)
 
 		if (brands[i].multiplier < 3)
 			textblock_append(tb, "weak ");
-		textblock_append(tb, brands[i].name);
+		textblock_append(tb, "%s", brands[i].name);
 		if (count > 1)
 			textblock_append(tb, ", ");
 		else
@@ -462,7 +449,8 @@ static bool describe_brands(textblock *tb, const struct object *obj)
 static void calculate_melee_crits(struct player_state *state, int weight,
 		int plus, int *mult, int *add, int *div)
 {
-	int k, to_crit = weight + 5 * (state->to_h + plus) + 3 * player->lev;
+	int k, to_crit = weight + 5 * (state->to_h + plus) +
+		3 * state->skills[SKILL_TO_HIT_MELEE] - 60;
 	to_crit = MIN(5000, MAX(0, to_crit));
 
 	*mult = *add = 0;
@@ -777,7 +765,7 @@ static bool obj_known_damage(const struct object *obj, int *normal_damage,
 
 	struct object *bow = equipped_item_by_slot_name(player, "shooting");
 	bool weapon = tval_is_melee_weapon(obj) && !throw;
-	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow);
+	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow) && !throw;
 	int melee_adj_mult = ammo ? 0 : 1;
 	int multiplier = 1;
 
@@ -830,7 +818,7 @@ static bool obj_known_damage(const struct object *obj, int *normal_damage,
 								&crit_add, &crit_div);
 
 		dam += (obj->known->to_d * 10);
-		dam *= 1 + player->lev / 12;
+		dam *= 2 + obj->weight / 12;
 	}
 
 	if (ammo) multiplier = player->state.ammo_mult;
@@ -968,7 +956,7 @@ static bool o_obj_known_damage(const struct object *obj, int *normal_damage,
 
 	struct object *bow = equipped_item_by_slot_name(player, "shooting");
 	bool weapon = tval_is_melee_weapon(obj) && !throw;
-	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow);
+	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow) && !throw;
 	int multiplier = 1;
 
 	struct player_state state;
@@ -1001,7 +989,7 @@ static bool o_obj_known_damage(const struct object *obj, int *normal_damage,
 		dice += o_calculate_missile_crits(player->state, obj, bow);
 	} else {
 		dice += o_calculate_missile_crits(player->state, obj, NULL);
-		dice *= 2 + player->lev / 12;
+		dice *= 2 + obj->weight / 12;
 	}
 
 	if (ammo) multiplier = player->state.ammo_mult;
@@ -1161,36 +1149,138 @@ static bool describe_damage(textblock *tb, const struct object *obj, bool throw)
 	}
 
 	if (has_brands_or_slays) {
-		/* Output damage for creatures effected by the brands */
-		for (i = 0; i < z_info->brand_max; i++) {
-			if (brand_damage[i] <= 0) {
-				continue;
-			} else if (brand_damage[i] % 10) {
-				textblock_append_c(tb, COLOUR_L_GREEN, "%d.%d",
-								   brand_damage[i] / 10, brand_damage[i] % 10);
-			} else {
-				textblock_append_c(tb, COLOUR_L_GREEN, "%d",
-								   brand_damage[i] / 10);
-			}
-			textblock_append(tb, " vs. creatures not resistant to %s, ",
-							 brands[i].name);
-		}
+		/*
+		 * Sort by decreasing damage so entries with the same damage
+		 * can be printed together.
+		 */
+		int *sortind = mem_alloc(
+			(z_info->brand_max + z_info->slay_max) *
+			sizeof(*sortind));
+		int nsort = 0;
+		const char *lastnm;
+		int lastdam, groupn;
+		bool last_is_brand;
 
-		/* Output damage for creatures effected by the slays */
+		/*
+		 * Assemble the indices.  Do the slays first so, if tied
+		 * for damage, they'll appear first.  That's easier to read.
+		 */
 		for (i = 0; i < z_info->slay_max; i++) {
-			if (slay_damage[i] <= 0) {
-				continue;
-			} else if (slay_damage[i] % 10) {
-				textblock_append_c(tb, COLOUR_L_GREEN, "%d.%d",
-								   slay_damage[i] / 10, slay_damage[i] % 10);
-			} else {
-				textblock_append_c(tb, COLOUR_L_GREEN, "%d",
-								   slay_damage[i] / 10);
+			if (slay_damage[i] > 0) {
+				sortind[nsort] = i + z_info->brand_max;
+				++nsort;
 			}
-			textblock_append(tb, " vs. %s, ", slays[i].name);
+		}
+		for (i = 0; i < z_info->brand_max; i++) {
+			if (brand_damage[i] > 0) {
+				sortind[nsort] = i;
+				++nsort;
+			}
+		}
+		/* Sort.  Since the number is small, insertion sort is fine. */
+		for (i = 0; i < nsort - 1; i++) {
+			int maxdam = (sortind[i] < z_info->brand_max) ?
+				brand_damage[sortind[i]] :
+				slay_damage[sortind[i] - z_info->brand_max];
+			int maxind = i;
+			int j;
+
+			for (j = i + 1; j < nsort; j++) {
+				int dam = (sortind[j] < z_info->brand_max) ?
+					brand_damage[sortind[j]] :
+					slay_damage[sortind[j] -
+						z_info->brand_max];
+
+				if (maxdam < dam) {
+					maxdam = dam;
+					maxind = j;
+				}
+			}
+			if (maxind != i) {
+				int tmp = sortind[maxind];
+
+				sortind[maxind] = sortind[i];
+				sortind[i] = tmp;
+			}
 		}
 
-		textblock_append(tb, "and ");
+		/* Output. */
+		lastdam = 0;
+		groupn = 0;
+		lastnm = NULL;
+		last_is_brand = false;
+		for (i = 0; i < nsort; i++) {
+			const char *tgt;
+			int dam;
+			bool is_brand;
+
+			if (sortind[i] < z_info->brand_max) {
+				is_brand = true;
+				tgt = brands[sortind[i]].name;
+				dam = brand_damage[sortind[i]];
+			} else {
+				is_brand = false;
+				tgt = slays[sortind[i] -
+					z_info->brand_max].name;
+				dam = slay_damage[sortind[i] -
+					z_info->brand_max];
+			}
+
+			if (groupn > 0) {
+				if (dam != lastdam) {
+					if (groupn > 2) {
+						textblock_append(tb, ", and");
+					} else if (groupn == 2) {
+						textblock_append(tb, " and");
+					}
+				} else if (groupn > 1) {
+					textblock_append(tb, ",");
+				}
+				if (last_is_brand) {
+					textblock_append(tb,
+						" creatures not resistant to");
+				}
+				textblock_append(tb, " %s", lastnm);
+			}
+			if (dam != lastdam) {
+				if (i != 0) {
+					textblock_append(tb, ", ");
+				}
+				if (dam % 10) {
+					textblock_append_c(tb, COLOUR_L_GREEN,
+						"%d.%d vs", dam / 10, dam % 10);
+				} else {
+					textblock_append_c(tb, COLOUR_L_GREEN,
+						"%d vs", dam / 10);
+				}
+				groupn = 1;
+				lastdam = dam;
+			} else {
+				assert(groupn > 0);
+				++groupn;
+			}
+			lastnm = tgt;
+			last_is_brand = is_brand;
+		}
+		if (groupn > 0) {
+			if (groupn > 2) {
+				textblock_append(tb, ", and");
+			} else if (groupn == 2) {
+				textblock_append(tb, " and");
+			}
+			if (last_is_brand) {
+				textblock_append(tb,
+					" creatures not resistant to");
+			}
+			textblock_append(tb, " %s", lastnm);
+		}
+
+		if (nsort == 0) {
+			has_brands_or_slays = false;
+		} else {
+			textblock_append(tb, (nsort == 1) ? " and " : ", and ");
+		}
+		mem_free(sortind);
 	}
 
 	if (normal_damage <= 0)
@@ -1272,13 +1362,14 @@ static bool describe_combat(textblock *tb, const struct object *obj)
 	bool weapon = tval_is_melee_weapon(obj);
 	bool ammo   = (player->state.ammo_tval == obj->tval) && (bow);
 	bool throwing_weapon = weapon && of_has(obj->flags, OF_THROWING);
+	bool rock = tval_is_ammo(obj) && of_has(obj->flags, OF_THROWING);
 
 	int range, break_chance;
 	bool thrown_effect, heavy;
 
 	obj_known_misc_combat(obj, &thrown_effect, &range, &break_chance, &heavy);
 
-	if (!weapon && !ammo) {
+	if (!weapon && !ammo && !rock) {
 		if (thrown_effect) {
 			textblock_append(tb, "It can be thrown at creatures with damaging effect.\n");
 			return true;
@@ -1293,14 +1384,16 @@ static bool describe_combat(textblock *tb, const struct object *obj)
 
 	describe_blows(tb, obj);
 
-	if (!weapon) { /* Ammo */
-		textblock_append(tb, "Hits targets up to ");
+	if (ammo) {
+		textblock_append(tb, "When fired, hits targets up to ");
 		textblock_append_c(tb, COLOUR_L_GREEN, format("%d", range));
 		textblock_append(tb, " feet away.\n");
 	}
 
-	describe_damage(tb, obj, false);
-	if (throwing_weapon) {
+	if (weapon || ammo) {
+		describe_damage(tb, obj, false);
+	}
+	if (throwing_weapon || rock) {
 		describe_damage(tb, obj, true);
 	}
 
@@ -1572,7 +1665,6 @@ static bool obj_known_effect(const struct object *obj, struct effect **effect,
 static bool describe_effect(textblock *tb, const struct object *obj,
 		bool only_artifacts, bool subjective)
 {
-	char desc[200];
 	struct effect *effect = NULL;
 	bool aimed = false;
 	int min_time, max_time, failure_chance;
@@ -1607,252 +1699,31 @@ static bool describe_effect(textblock *tb, const struct object *obj,
 	/* Activations get a special message */
 	if (obj->activation && obj->activation->desc) {
 		textblock_append(tb, "When activated, it ");
-		textblock_append(tb, obj->activation->desc);
+		textblock_append(tb, "%s", obj->activation->desc);
 	} else {
-		int random_choices = 0;
-		bool random_breath = (effect && (effect->index == EF_RANDOM) &&
-							  effect->next &&
-							  (effect->next->index == EF_BREATH));
-		char breaths[120];
-
-		my_strcpy(breaths, "", sizeof(breaths));
-
-		/* Get descriptions for all the effects */
-		effect = object_effect(obj);
-		if (!effect_desc(effect)) return false;
+		int level = obj->artifact ?
+			obj->artifact->level : obj->kind->level;
+		int boost = MAX((player->state.skills[SKILL_DEVICE] - level) / 2, 0);
+		const char *prefix;
+		textblock *tbe;
 
 		if (aimed)
-			textblock_append(tb, "When aimed, it ");
+			prefix = "When aimed, it ";
 		else if (tval_is_edible(obj))
-			textblock_append(tb, "When eaten, it ");
+			prefix = "When eaten, it ";
 		else if (tval_is_potion(obj))
-			textblock_append(tb, "When quaffed, it ");
+			prefix = "When quaffed, it ";
 		else if (tval_is_scroll(obj))
-			textblock_append(tb, "When read, it ");
+			prefix = "When read, it ";
 		else
-			textblock_append(tb, "When activated, it ");
+			prefix = "When activated, it ";
 
-		/* Print a colourised description */
-		while (effect) {
-			char *next_char = desc;
-			int roll = 0;
-			random_value value = { 0, 0, 0, 0 };
-			char dice_string[20];
-
-			int level = obj->artifact ? obj->artifact->level : obj->kind->level;
-			int boost = MAX(player->state.skills[SKILL_DEVICE] - level, 0);
-
-			if (effect->dice != NULL)
-				roll = dice_roll(effect->dice, &value);
-
-			/* Deal with special random effect */
-			if (effect->index == EF_RANDOM)
-				random_choices = roll + 1;
-
-			/* Get the possible dice strings */
-			if (value.dice && value.base)
-				strnfmt(dice_string, sizeof(dice_string), "%d+%dd%d",
-						value.base, value.dice, value.sides);
-			else if (value.dice)
-				strnfmt(dice_string, sizeof(dice_string), "%dd%d",
-						value.dice, value.sides);
-			else
-				strnfmt(dice_string, sizeof(dice_string), "%d", value.base);
-
-			/* Check all the possible types of description format */
-			switch (base_descs[effect->index].efinfo_flag) {
-				/* Healing sometimes has a minimum percentage */
-			case EFINFO_HEAL: {
-				char min_string[50];
-				if (value.m_bonus)
-					strnfmt(min_string, sizeof(min_string),
-							" (or %d%%, whichever is greater)", value.m_bonus);
-				else
-					strnfmt(min_string, sizeof(min_string), "");
-				strnfmt(desc, sizeof(desc), effect_desc(effect), dice_string,
-						min_string);
-				break;
-			}
-
-			case EFINFO_CONST: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect), value.base/2);
-				break;
-			}
-			case EFINFO_FOOD: {
-				char *fed = effect->subtype ? "leaves you nourished" :
-					"feeds you";
-				strnfmt(desc, sizeof(desc), effect_desc(effect), fed,
-						value.base * z_info->food_value, value.base);
-				break;
-			}
-			case EFINFO_CURE: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						timed_effects[effect->subtype].desc);
-				break;
-			}
-			case EFINFO_TIMED: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						timed_effects[effect->subtype].desc, dice_string);
-				break;
-			}
-			case EFINFO_STAT: {
-				int stat = effect->subtype;
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						lookup_obj_property(OBJ_PROPERTY_STAT, stat)->name);
-				break;
-			}
-			case EFINFO_SEEN: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].desc);
-				break;
-			}
-			case EFINFO_SUMM: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						summon_desc(effect->subtype));
-				break;
-			}
-
-			/* Only currently used for the player, but can handle monsters */
-			case EFINFO_TELE: {
-				char *dist = value.m_bonus ?
-					" a level dependent distance" :
-					format(" %d grids", value.base);
-
-				if (effect->subtype) {
-					strnfmt(desc, sizeof(desc), effect_desc(effect),
-							"a monster", dist);
-				} else {
-					strnfmt(desc, sizeof(desc), effect_desc(effect), "you",
-							dist);
-				}
-				break;
-			}
-			case EFINFO_QUAKE: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						effect->radius);
-				break;
-			}
-
-			/* Object generated balls are elemental */
-			case EFINFO_BALL: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].player_desc,
-						effect->radius, dice_string);
-				if (boost)
-					my_strcat(desc, format(", which your device skill increases by %d per cent", boost),
-							  sizeof(desc));
-				break;
-			}
-
-			/* Object generated breaths are elemental */
-			case EFINFO_BREATH: {
-				/* Special treatment for several random breaths */
-				if (random_breath) {
-					my_strcat(breaths,
-							  projections[effect->subtype].player_desc,
-							  sizeof(breaths));
-					if (random_choices > 3) {
-						my_strcat(breaths, ", ", sizeof(breaths));
-					} else if (random_choices == 3) {
-						my_strcat(breaths, " or ", sizeof(breaths));
-					}
-					random_choices--;
-
-					if ((!effect->next) || (effect->next->index != EF_BREATH)) {
-						random_breath = false;
-					}
-					strnfmt(desc, sizeof(desc), effect_desc(effect), breaths,
-							effect->other, dice_string);
-				} else {
-					strnfmt(desc, sizeof(desc), effect_desc(effect),
-							projections[effect->subtype].player_desc,
-							effect->other, dice_string);
-				}
-				break;
-			}
-
-			case EFINFO_SHORT: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect), 
-						projections[effect->subtype].player_desc,
-						effect->radius +
-						effect->other ? effect->other / player->lev : 0,
-						dice_string);
-				break;
-			}
-
-			/* Currently no object generated lashes */
-			case EFINFO_LASH: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].lash_desc,
-						effect->subtype);
-				break;
-			}
-
-			/* Bolts that inflict status */
-			case EFINFO_BOLT: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].desc);
-				break;
-			}
-			/* Bolts and beams that damage */
-			case EFINFO_BOLTD: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].desc, dice_string);
-				if (boost)
-					my_strcat(desc, format(", which your device skill increases by %d per cent", boost),
-							  sizeof(desc));
-				break;
-			}
-			case EFINFO_TOUCH: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						projections[effect->subtype].desc);
-				break;
-			}
-			case EFINFO_TAP: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect),
-						dice_string);
-				break;
-			}
-			case EFINFO_NONE: {
-				strnfmt(desc, sizeof(desc), effect_desc(effect));
-				break;
-			}
-			default: {
-				msg("Bad effect description passed to describe_effect(). Please report this bug.");
-				return false;
-			}
-			}
-
-			do {
-				if (random_breath && effect->index != EF_RANDOM) break;
-				if (isdigit((unsigned char) *next_char))
-					textblock_append_c(tb, COLOUR_L_GREEN, "%c", *next_char);
-				else
-					textblock_append(tb, "%c", *next_char);
-			} while (*next_char++);
-
-			/* Random choices need special treatment - note that this code
-			 * assumes that RANDOM and the random choices will be the last
-			 * effect in the object/activation description */
-			if (random_breath) {
-				/* Handled in effect description */
-				;
-			} else if (random_choices >= 1) {
-				if (effect->index == EF_RANDOM)
-					;
-				else if (random_choices > 2)
-					textblock_append(tb, ", ");
-				else if (random_choices == 2)
-					textblock_append(tb, " or ");
-				random_choices--;
-			} else if (effect->next) {
-				if (effect->next->next && (effect->next->index != EF_RANDOM))
-					textblock_append(tb, ", ");
-				else
-					textblock_append(tb, " and ");
-			}
-			effect = effect->next;
+		tbe = effect_describe(effect, prefix, boost, false);
+		if (! tbe) {
+			return false;
 		}
+		textblock_append_textblock(tb, tbe);
+		textblock_free(tbe);
 	}
 
 	textblock_append(tb, ".\n");

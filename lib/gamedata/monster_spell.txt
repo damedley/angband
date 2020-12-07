@@ -121,7 +121,7 @@ message-vis:{name} fires a little bolt.
 message-invis:You hear a soft twung.
 message-miss:{name} fires a little bolt, but misses.
 power-cutoff:25
-lore:fire arrows
+lore:fire bolts
 lore-color-base:Yellow
 message-vis:{name} fires a crossbow bolt.
 message-invis:You hear a twung.
@@ -483,7 +483,7 @@ hit:100
 effect:BALL:HOLY_ORB:2
 dice:10+1d$S
 expr:S:SPELL_POWER:* 3 / 2
-lore:invoke mana storms
+lore:cast orbs of draining
 lore-color-base:Orange
 message-vis:{name} casts an orb of draining.
 message-invis:Something chants.
